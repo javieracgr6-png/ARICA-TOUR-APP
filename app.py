@@ -18,6 +18,39 @@ import pandas as pd
 import streamlit as st
 import pydeck as pdk
 
+# --- Estilos tipo “app móvil” ---
+CARD_CSS = """
+<style>
+:root { --radius: 16px; --shadow: 0 10px 25px rgba(0,0,0,.08); }
+.hero {
+  border-radius: var(--radius); padding: 16px 18px; background: linear-gradient(135deg,#0ea5e9, #22d3ee);
+  color: #fff; box-shadow: var(--shadow); margin-bottom: 14px;
+}
+.hero h3 { margin: 0 0 8px 0; font-weight: 700; }
+.hero .chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.chip {
+  background: rgba(255,255,255,.18); border-radius: 12px; padding: 10px 12px; backdrop-filter: blur(4px);
+  border: 1px solid rgba(255,255,255,.25); font-size: 14px;
+}
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.tile {
+  border-radius: var(--radius); background: #ffffff; box-shadow: var(--shadow); padding: 16px;
+  border: 1px solid #eef2f7;
+}
+.tile h4 { margin: 0 0 6px 0; font-weight: 700; }
+.tile p { margin: 0 0 10px 0; color: #607083; font-size: 13px; min-height: 32px;}
+.tile .btn {
+  display: inline-block; border-radius: 10px; padding: 8px 12px; background: #0ea5e9; color: #fff; text-decoration: none;
+  border: none; cursor: pointer; font-size: 14px;
+}
+.badge { display:inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.25); font-size: 12px; }
+.small { font-size: 12px; opacity: .9 }
+</style>
+"""
+# Activar los estilos en toda la app
+st.markdown(CARD_CSS, unsafe_allow_html=True)
+
+
 # ---------------- Configuración general ----------------
 LOGO_PATH = "logo.png"  # coloca tu logo en el repo con este nombre (ver sección de logo)
 APP_URL = ""            # cuando la app esté desplegada en Streamlit Cloud, pega aquí la URL pública
