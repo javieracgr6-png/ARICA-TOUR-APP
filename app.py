@@ -588,3 +588,68 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ==================================================
+# === Navegación entre secciones (modo App) ===
+# ==================================================
+
+# Barra lateral (menú de navegación)
+st.sidebar.title("📍 Navegación")
+page = st.sidebar.radio("Ir a:", [
+    "🏠 Inicio",
+    "📍 Lugares cerca de ti",
+    "🗺️ Planificar itinerario",
+    "💱 Convertir moneda",
+    "⭐ Buscar atracciones"
+])
+
+# -------------------------------
+# 🏠 Sección: INICIO
+# -------------------------------
+if page == "🏠 Inicio":
+    st.markdown("### 🌍 Bienvenido a AricaGO — Tu Asistente Turístico Inteligente")
+    st.write("Explora lugares destacados, planifica tus días y consulta el clima en tiempo real.")
+    st.write("Selecciona una opción en la barra lateral para comenzar.")
+
+# -------------------------------
+# 📍 Sección: LUGARES CERCA
+# -------------------------------
+elif page == "📍 Lugares cerca de ti":
+    st.subheader("📍 Lugares cercanos")
+    st.write("Mostrando atractivos dentro de un radio de 5 km desde tu ubicación actual.")
+    try:
+        df = pd.read_csv("atractivos.csv")  # si tienes dataset local
+        lugares = nearby_places(df, lat, lon)
+        if lugares:
+            for d, name, r in lugares:
+                st.markdown(f"**{name}** — {d:.2f} km")
+        else:
+            st.info("No se encontraron lugares cercanos en el radio de 5 km.")
+    except Exception:
+        st.warning("No se pudo cargar la base de datos de atractivos.")
+
+# -------------------------------
+# 🗺️ Sección: PLANIFICAR ITINERARIO
+# -------------------------------
+elif page == "🗺️ Planificar itinerario":
+    st.subheader("🗺️ Planificar itinerario")
+    st.write("Selecciona los atractivos turísticos que te interesen y genera tu ruta óptima.")
+    dias = st.number_input("¿Cuántos días durará tu viaje?", min_value=1, max_value=10, value=3)
+    st.write(f"Tu itinerario cubrirá {dias} día(s). (Función en desarrollo)")
+
+# -------------------------------
+# 💱 Sección: CONVERTIR MONEDA
+# -------------------------------
+elif page == "💱 Convertir moneda":
+    st.subheader("💱 Conversor de Moneda")
+    st.write("Convierte entre CLP (peso chileno) y otras monedas.")
+    monto = st.number_input("Monto en pesos chilenos (CLP):", min_value=0.0, value=10000.0)
+    tasa_usd = 0.0011  # ejemplo estático, 1 CLP = 0.0011 USD
+    st.write(f"💵 Equivalente en USD: **{monto * tasa_usd:.2f}**")
+
+# -------------------------------
+# ⭐ Sección: BUSCAR ATRACCIONES
+# -------------------------------
+elif page == "⭐ Buscar atracciones":
+    st.subheader("⭐ Buscar atracciones")
+    st.text_input("🔍 Escribe el nombre de una atracción o tipo de lugar:")
+    st.info("Ejemplo: 'playa', 'museo', 'mirador'. (Próximamente con búsqueda inteligente)")
