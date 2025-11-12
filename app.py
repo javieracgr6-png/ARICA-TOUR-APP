@@ -211,7 +211,8 @@ if "seleccion" not in st.session_state:
     st.session_state.seleccion = set([1, 3, 4, 5])  # pre-selección de ejemplo
 
 # ---------------- Sidebar y navegación ----------------
-st.sidebar.image(LOGO_PATH, width=140) if LOGO_PATH else None
+if LOGO_PATH:
+    st.sidebar.image(LOGO_PATH, width=140)
 st.sidebar.title("🧭 Asistente Turístico")
 seccion = st.sidebar.radio(
     "Ir a",
