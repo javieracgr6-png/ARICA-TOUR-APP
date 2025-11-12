@@ -50,6 +50,52 @@ CARD_CSS = """
 # Activar los estilos en toda la app
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
+# ==================================================
+# === Funciones auxiliares para ubicación y clima ===
+# ==================================================
+
+import requests
+from math import radians, sin, cos, asin, sqrt
+from datetime import datetime
+
+def km_haversine(lat1, lon1, lat2, lon2):
+    """Calcula distancia en km entre dos coordenadas."""
+    R = 6371.0
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlmb = radians(lon2 - lon1)
+    a = sin(dphi/2)**2 + cos(p1)*cos(p2)*sin(dlmb/2)**2
+    return 2 * R * asin(sqrt(a))
+
+def ip_geolocate():
+    """Obtiene ubicación aproximada por IP pública."""
+    try:
+        r = requests.get("https://ipapi.co/json/", timeout=5)
+        j = r.json()
+        return float(j.get("latitude", -18.48)), float(j.get("longitude", -70.32)), j.get("city", "Arica"), j.get("country_name", "Chile")
+    except Exception:
+        # Si no hay conexión o falla la API, usa Arica como valor por defecto
+        return -18.48, -70.32, "Arica", "Chile"
+
+def current_weather(lat, lon):
+    """Obtiene clima actual usando Open-Meteo."""
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        j = requests.get(url, timeout=6).json()
+        temp = j["current_weather"]["temperature"]
+        return temp, "Despejado"
+    except Exception:
+        return None, "—"
+
+def nearby_places(df, lat, lon, max_km=5.0):
+    """Filtra lugares cercanos según coordenadas."""
+    rows = []
+    for _, r in df.iterrows():
+        d = km_haversine(lat, lon, r["lat"], r["lon"])
+        if d <= max_km:
+            rows.append((d, r["nombre"], r))
+    rows.sort(key=lambda x: x[0])
+    return rows[:6]
 
 # ---------------- Configuración general ----------------
 LOGO_PATH = "logo.png"  # coloca tu logo en el repo con este nombre (ver sección de logo)
@@ -491,3 +537,54 @@ if seccion == "🔗 QR de la app":
     1) Con una web: prueba `qr-code-generator.com` o `goqr.me`, pega tu URL pública y descarga el PNG.  
     2) Con Python (script local) usando `qrcode` + `Pillow`. Consulta las instrucciones en el README o en esta misma app (más abajo).
     """)
+  # ==================================================
+# === Pantalla de inicio (UI principal estilo móvil) ===
+# ==================================================
+
+# 1️⃣ Obtener ubicación y clima
+lat, lon, city, country = ip_geolocate()
+temp, weather = current_weather(lat, lon)
+today = datetime.now().strftime("%d de %B de %Y")
+
+# 2️⃣ Encabezado principal (hero azul)
+st.markdown(f"""
+<div class="hero">
+  <h3>🌍 Asistente Turístico Arica & Parinacota</h3>
+  <div class="chips">
+    <div class="chip">📍 {city}, {country}</div>
+    <div class="chip">☀️ {weather} — {temp if temp else '?'}°C</div>
+    <div class="chip">📅 {today}</div>
+    <div class="chip">🧭 Lat: {round(lat,2)} / Lon: {round(lon,2)}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# 3️⃣ Recuadros inferiores (acciones rápidas)
+st.markdown("""
+<div class="grid">
+  <div class="tile">
+    <h4>📍 Lugares cerca de ti</h4>
+    <p>Descubre los atractivos turísticos más próximos a tu ubicación.</p>
+    <a href="#" class="btn">Explorar</a>
+  </div>
+
+  <div class="tile">
+    <h4>🗺️ Planificar itinerario</h4>
+    <p>Organiza tus visitas según distancia y tiempo disponible.</p>
+    <a href="#" class="btn">Comenzar</a>
+  </div>
+
+  <div class="tile">
+    <h4>💱 Convertir moneda</h4>
+    <p>Consulta tasas de cambio y convierte valores al instante.</p>
+    <a href="#" class="btn">Abrir</a>
+  </div>
+
+  <div class="tile">
+    <h4>⭐ Encontrar atracciones</h4>
+    <p>Busca sitios emblemáticos, playas, museos y rutas locales.</p>
+    <a href="#" class="btn">Buscar</a>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
