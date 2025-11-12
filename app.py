@@ -1,65 +1,61 @@
-# -*- coding: utf-8 -*-
-# ============================================================
-# Asistente Turístico Inteligente - Región de Arica y Parinacota
-# Streamlit App (versión extendida)
-# - Más atractivos (con fotos)
-# - Duración sugerida por lugar (min)
-# - Horarios de apertura (validación suave)
-# - Estimación de tiempo y costo de traslado (editable por el usuario)
-# - Itinerario que agrupa por cercanía y calcula horas del día
-# - Mapa interactivo por "día"
-# - Opción para mostrar un QR con el enlace de la app (si se configura)
-# ============================================================
+# ==========================================================
+#  ARICA GO! – Asistente Turístico (Streamlit)
+#  Navegación sin radios; botones que cambian de sección.
+#  Barra lateral mínima (logo + ubicación). “Volver al inicio”
+# ==========================================================
 
-import math
-from datetime import datetime, timedelta
-import numpy as np
-import pandas as pd
 import streamlit as st
-import pydeck as pdk
+import pandas as pd
+from datetime import datetime
+from math import radians, sin, cos, asin, sqrt
+import requests
+import os
 
-# --- Estilos tipo “app móvil” ---
+# ------------- Config general -------------
+LOGO_PATH = "logo.png"      # pon tu logo en la raíz con este nombre
+APP_TITLE = "Asistente Turístico · Arica y Parinacota"
+
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else "🌞",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ------------- Estilos (CSS) tipo app móvil -------------
 CARD_CSS = """
 <style>
 :root { --radius: 16px; --shadow: 0 10px 25px rgba(0,0,0,.08); }
+
 .hero {
-  border-radius: var(--radius); padding: 16px 18px; background: linear-gradient(135deg,#0ea5e9, #22d3ee);
+  border-radius: var(--radius); padding: 16px 18px;
+  background: linear-gradient(135deg,#0ea5e9, #22d3ee);
   color: #fff; box-shadow: var(--shadow); margin-bottom: 14px;
 }
-.hero h3 { margin: 0 0 8px 0; font-weight: 700; }
+.hero h2 { margin: 0 0 10px 0; font-weight: 800; }
 .hero .chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .chip {
   background: rgba(255,255,255,.18); border-radius: 12px; padding: 10px 12px; backdrop-filter: blur(4px);
   border: 1px solid rgba(255,255,255,.25); font-size: 14px;
 }
+
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .tile {
   border-radius: var(--radius); background: #ffffff; box-shadow: var(--shadow); padding: 16px;
   border: 1px solid #eef2f7;
 }
-.tile h4 { margin: 0 0 6px 0; font-weight: 700; }
+.tile h4 { margin: 0 0 6px 0; font-weight: 800; }
 .tile p { margin: 0 0 10px 0; color: #607083; font-size: 13px; min-height: 32px;}
-.tile .btn {
-  display: inline-block; border-radius: 10px; padding: 8px 12px; background: #0ea5e9; color: #fff; text-decoration: none;
-  border: none; cursor: pointer; font-size: 14px;
-}
+.btn-full { width: 100%; border: none; border-radius: 10px; padding: 10px 12px; background: #0ea5e9; color: #fff; cursor: pointer; }
 .badge { display:inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.25); font-size: 12px; }
 .small { font-size: 12px; opacity: .9 }
 </style>
 """
-# Activar los estilos en toda la app
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
-# ==================================================
-# === Funciones auxiliares para ubicación y clima ===
-# ==================================================
-
-import requests
-from math import radians, sin, cos, asin, sqrt
-from datetime import datetime
+# ------------- Helpers: distancia, ubicación, clima, cercanos -------------
 
 def km_haversine(lat1, lon1, lat2, lon2):
-    """Calcula distancia en km entre dos coordenadas."""
     R = 6371.0
     p1, p2 = radians(lat1), radians(lat2)
     dphi = radians(lat2 - lat1)
@@ -68,588 +64,212 @@ def km_haversine(lat1, lon1, lat2, lon2):
     return 2 * R * asin(sqrt(a))
 
 def ip_geolocate():
-    """Obtiene ubicación aproximada por IP pública."""
+    """Ubicación aproximada por IP pública (puede devolver el país del servidor)."""
     try:
         r = requests.get("https://ipapi.co/json/", timeout=5)
         j = r.json()
-        return float(j.get("latitude", -18.48)), float(j.get("longitude", -70.32)), j.get("city", "Arica"), j.get("country_name", "Chile")
+        return float(j.get("latitude", -18.4783)), float(j.get("longitude", -70.3126)), j.get("city", "Arica"), j.get("country_name", "Chile")
     except Exception:
-        # Si no hay conexión o falla la API, usa Arica como valor por defecto
-        return -18.48, -70.32, "Arica", "Chile"
+        return -18.4783, -70.3126, "Arica", "Chile"
 
 def current_weather(lat, lon):
-    """Obtiene clima actual usando Open-Meteo."""
+    """Clima actual (Open-Meteo)."""
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
         j = requests.get(url, timeout=6).json()
-        temp = j["current_weather"]["temperature"]
-        return temp, "Despejado"
+        t = j["current_weather"]["temperature"]
+        return t, "Despejado"
     except Exception:
         return None, "—"
 
-def nearby_places(df, lat, lon, max_km=5.0):
-    """Filtra lugares cercanos según coordenadas."""
+def nearby_places(df, lat, lon, max_km=6.0, limit=8):
     rows = []
     for _, r in df.iterrows():
         d = km_haversine(lat, lon, r["lat"], r["lon"])
         if d <= max_km:
             rows.append((d, r["nombre"], r))
     rows.sort(key=lambda x: x[0])
-    return rows[:6]
+    return rows[:limit]
 
-# ---------------- Configuración general ----------------
-LOGO_PATH = "logo.png"  # coloca tu logo en el repo con este nombre (ver sección de logo)
-APP_URL = ""            # cuando la app esté desplegada en Streamlit Cloud, pega aquí la URL pública
-                        # ejemplo: "https://tu-usuario-tu-repo.streamlit.app"
-
-st.set_page_config(
-    page_title="Asistente Turístico Arica y Parinacota",
-    page_icon=LOGO_PATH if LOGO_PATH else "🧭",  # si no pones logo.png, usará el emoji
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ----------------- Atractivos (dataset base) -----------------
-# Campos:
-# id, nombre, tipo, lat, lon, desc, link, img, dur_min (tiempo sugerido), horario ("HH:MM-HH:MM")
-ATRACTIVOS = pd.DataFrame([
-    # --- Arica urbano / costa ---
-    {"id": 1, "nombre": "Playa Chinchorro", "tipo": "Playa", "lat": -18.4718, "lon": -70.3039,
-     "desc": "Amplia playa urbana ideal para caminar y disfrutar del atardecer.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/5/50/Playa_Chinchorro_Arica.jpg",
-     "dur_min": 90, "horario": "00:00-23:59"},
-    {"id": 2, "nombre": "Morro de Arica (Mirador/Museo)", "tipo": "Mirador", "lat": -18.4824, "lon": -70.3249,
-     "desc": "Ícono histórico con vistas de la ciudad; museo de sitio.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/2/20/Arica_-_Morro.jpg",
-     "dur_min": 60, "horario": "10:00-18:00"},
-    {"id": 3, "nombre": "Cuevas de Anzota", "tipo": "Formación rocosa", "lat": -18.5495, "lon": -70.3435,
-     "desc": "Sendero costero entre acantilados y cuevas con fauna marina.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/b/b3/Cuevas_de_Anzota.jpg",
-     "dur_min": 90, "horario": "09:00-18:00"},
-    {"id": 4, "nombre": "Humedal del Río Lluta", "tipo": "Humedal", "lat": -18.4389, "lon": -70.3147,
-     "desc": "Santuario, hábitat de aves migratorias. Llevar binoculares.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/5/59/Humedal_Rio_Lluta.jpg",
-     "dur_min": 60, "horario": "08:00-18:00"},
-    {"id": 5, "nombre": "Museo Arqueológico San Miguel de Azapa", "tipo": "Museo", "lat": -18.5212, "lon": -70.1745,
-     "desc": "Momias Chinchorro y arqueología regional.",
-     "link": "https://www.museoazapa.cl/",
-     "img": "https://www.museoazapa.cl/wp-content/uploads/2019/04/IMG_6031.jpg",
-     "dur_min": 90, "horario": "10:00-18:00"},
-    {"id": 6, "nombre": "Valle de Azapa (Olivares y geoglifos)", "tipo": "Valle", "lat": -18.5000, "lon": -70.2000,
-     "desc": "Agricultura, pueblos, geoglifos y gastronomía local.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Valle_de_Azapa.jpg",
-     "dur_min": 120, "horario": "08:00-19:00"},
-    {"id": 7, "nombre": "Terminal Agro Arica", "tipo": "Mercado", "lat": -18.4827, "lon": -70.2994,
-     "desc": "Mercado típico con jugos, frutas, aceitunas y cocina local.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/1/19/Terminal_Agro_Arica.jpg",
-     "dur_min": 60, "horario": "08:00-19:00"},
-    {"id": 12, "nombre": "Oficina Sobraya (ruinas salitreras)", "tipo": "Sitio histórico", "lat": -18.5895, "lon": -70.1330,
-     "desc": "Vestigios de la época del salitre en el desierto costero.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/1/12/Sobraya_ruinas.jpg",
-     "dur_min": 60, "horario": "08:00-17:00"},
-    # --- Precordillera / Altiplano ---
-    {"id": 8, "nombre": "Putre (pueblo altiplánico)", "tipo": "Pueblo", "lat": -18.1987, "lon": -69.5590,
-     "desc": "Arquitectura andina; base para explorar el altiplano.",
-     "link": "https://www.sernatur.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Putre.jpg",
-     "dur_min": 90, "horario": "00:00-23:59"},
-    {"id": 9, "nombre": "Parque Nacional Lauca", "tipo": "Parque", "lat": -18.2371, "lon": -69.2960,
-     "desc": "Lagunas, bofedales, fauna altoandina y volcanes (CONAF).",
-     "link": "https://www.conaf.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/4/4a/Parque_Nacional_Lauca.jpg",
-     "dur_min": 180, "horario": "08:00-18:00"},
-    {"id": 10, "nombre": "Lago Chungará", "tipo": "Lago", "lat": -18.2485, "lon": -69.1608,
-     "desc": "Lago altoandino junto al volcán Parinacota.",
-     "link": "https://www.conaf.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/4/4b/Lago_Chungara.jpg",
-     "dur_min": 90, "horario": "08:00-18:00"},
-    {"id": 11, "nombre": "Salar de Surire (Monumento Natural)", "tipo": "Salar", "lat": -18.9990, "lon": -69.0410,
-     "desc": "Flamencos, vicuñas y salares; consultar estado de ruta.",
-     "link": "https://www.conaf.cl/",
-     "img": "https://upload.wikimedia.org/wikipedia/commons/7/7a/Surire.jpg",
-     "dur_min": 120, "horario": "08:00-17:00"},
-])
-
-# ---------------- Utilidades geográficas ----------------
-def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlmb = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlmb/2)**2
-    return 2 * R * math.asin(math.sqrt(a))
-
-def distance_matrix(points):
-    n = len(points)
-    M = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in range(i+1, n):
-            d = haversine_km(points[i][0], points[i][1], points[j][0], points[j][1])
-            M[i, j] = M[j, i] = d
-    return M
-
-# ---------------- Clustering (k ≈ días) ----------------
-def maxmin_seeds(coords, k):
-    if k <= 0: return []
-    n = len(coords)
-    seeds = [0]
-    while len(seeds) < k:
-        dmin = []
-        for i in range(n):
-            if i in seeds:
-                dmin.append(-1)
-                continue
-            mins = [haversine_km(coords[i][0], coords[i][1], coords[s][0], coords[s][1]) for s in seeds]
-            dmin.append(min(mins))
-        idx = int(np.argmax(dmin))
-        seeds.append(idx)
-    return seeds
-
-def assign_to_clusters(coords, centers_idx):
-    clusters = [[] for _ in centers_idx]
-    for i, (lat, lon) in enumerate(coords):
-        best_k, best_d = 0, float("inf")
-        for k, s in enumerate(centers_idx):
-            d = haversine_km(lat, lon, coords[s][0], coords[s][1])
-            if d < best_d:
-                best_d, best_k = d, k
-        clusters[best_k].append(i)
-    return clusters
-
-def recompute_centers(coords, clusters):
-    new_centers_idx = []
-    for cl in clusters:
-        if not cl:
-            new_centers_idx.append(None)
-            continue
-        lat_mean = float(np.mean([coords[i][0] for i in cl]))
-        lon_mean = float(np.mean([coords[i][1] for i in cl]))
-        best_i, best_d = None, float("inf")
-        for i in cl:
-            d = haversine_km(lat_mean, lon_mean, coords[i][0], coords[i][1])
-            if d < best_d:
-                best_d, best_i = d, i
-        new_centers_idx.append(best_i)
-    return new_centers_idx
-
-def simple_kmeans_like(coords, k, iters=5):
-    if k <= 0: return [[]]
-    k = min(k, len(coords))
-    centers_idx = maxmin_seeds(coords, k)
-    for _ in range(iters):
-        clusters = assign_to_clusters(coords, centers_idx)
-        new_centers = recompute_centers(coords, clusters)
-        centers_idx = [nc if nc is not None else centers_idx[i] for i, nc in enumerate(new_centers)]
-    clusters = assign_to_clusters(coords, centers_idx)
-    return clusters
-
-def nearest_neighbor_route(points_idx, distM):
-    if len(points_idx) <= 2:
-        return points_idx[:]
-    unvisited = set(points_idx)
-    current = points_idx[0]
-    route = [current]
-    unvisited.remove(current)
-    while unvisited:
-        nxt = min(unvisited, key=lambda j: distM[current, j])
-        route.append(nxt)
-        unvisited.remove(nxt)
-        current = nxt
-    return route
-
-# ---------------- Helpers de horarios y traslados ----------------
-def parse_hhmm(txt):
-    return datetime.strptime(txt, "%H:%M").time()
-
-def dentro_horario(hhmm, rango_txt):
-    """hhmm: datetime.time; rango_txt: 'HH:MM-HH:MM' """
-    try:
-        ini_txt, fin_txt = rango_txt.split("-")
-        ini, fin = parse_hhmm(ini_txt), parse_hhmm(fin_txt)
-        return ini <= hhmm <= fin
-    except Exception:
-        return True  # si no hay horario bien formado, no bloqueamos
-
-def estimar_tiempo_traslado(dist_km, vel_kmh):
-    """Devuelve timedelta estimado dado km y velocidad."""
-    horas = dist_km / max(vel_kmh, 1e-6)
-    mins = int(round(horas * 60))
-    return timedelta(minutes=mins)
-
-# ---------------- Estado de sesión ----------------
-if "favoritos" not in st.session_state:
-    st.session_state.favoritos = set()
+# -------------------------------------------------------------------------
+# ESTADO: página activa y selección
+# -------------------------------------------------------------------------
+if "page" not in st.session_state:
+    st.session_state.page = "HOME"   # HOME, CERCANOS, PLAN, FX, BUSCAR
 if "seleccion" not in st.session_state:
-    st.session_state.seleccion = set([1, 3, 4, 5])  # pre-selección de ejemplo
+    st.session_state.seleccion = set()
 
-# ---------------- Sidebar y navegación ----------------
-if LOGO_PATH:
+# -------------------------------------------------------------------------
+# SIDEBAR mínimo (solo branding + ubicación)
+# -------------------------------------------------------------------------
+if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, width=140)
-st.sidebar.title("🧭 Asistente Turístico")
-seccion = st.sidebar.radio(
-    "Ir a",
-    ["🏠 Pantalla de inicio", "📊 Panel de inicio", "🗺️ Explora destinos",
-     "ℹ️ Detalles de la atracción", "🗓️ Planificador de viajes", "🧭 Mapa interactivo", "🔗 QR de la app"]
-)
 
-# ---------------- Pantalla de inicio ----------------
-if seccion == "🏠 Pantalla de inicio":
-    st.title("Asistente Turístico • Arica y Parinacota")
-    st.markdown("""
-    Descubre atractivos, revisa información clave (duración, horarios), **planifica** por cercanía y visualiza el
-    itinerario en un **mapa interactivo**. También puedes **editar** manualmente el plan si deseas.
-    """)
-    st.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Arica_-_Morro.jpg/1280px-Arica_-_Morro.jpg",
-        caption="Morro de Arica (referencial)",
-        use_column_width=True
+st.sidebar.title("📌 Ubicación")
+modo_ubi = st.sidebar.selectbox("Elegir:", ["Arica (fijar)", "Detectar por IP", "Manual"], index=0)
+
+if modo_ubi == "Arica (fijar)":
+    lat, lon = -18.4783, -70.3126
+    city, country = "Arica", "Chile"
+elif modo_ubi == "Manual":
+    lat = st.sidebar.number_input("Latitud", value=-18.478300, step=0.0001, format="%.6f")
+    lon = st.sidebar.number_input("Longitud", value=-70.312600, step=0.0001, format="%.6f")
+    city, country = "Ubicación manual", "—"
+else:
+    lat, lon, city, country = ip_geolocate()
+
+temp, wx = current_weather(lat, lon)
+st.sidebar.markdown(f"**Clima**: {wx} {(str(temp)+'°C') if temp is not None else ''}")
+st.sidebar.caption(f"Lat: {round(lat,4)}  Lon: {round(lon,4)}")
+
+# Botón global para volver al inicio si no estamos en HOME
+if st.session_state.page != "HOME":
+    if st.sidebar.button("← Volver al inicio", use_container_width=True):
+        st.session_state.page = "HOME"
+        st.rerun()
+
+# -------------------------------------------------------------------------
+# DATOS (puedes reemplazar por tu dataset real)
+# -------------------------------------------------------------------------
+# Ejemplo mínimo por si no tienes CSV aún:
+data_ejemplo = [
+    {"id": 1, "nombre": "Playa Chinchorro", "tipo":"Playa", "lat": -18.4527, "lon": -70.3106,
+     "desc":"Amplia playa urbana, ideal para caminar.", "img": ""},
+    {"id": 2, "nombre": "Cuevas de Anzota", "tipo":"Mirador", "lat": -18.5306, "lon": -70.3326,
+     "desc":"Formaciones rocosas con sendero y vistas al mar.", "img": ""},
+    {"id": 3, "nombre": "Museo San Miguel de Azapa", "tipo":"Museo", "lat": -18.5180, "lon": -70.1813,
+     "desc":"Muestra arqueológica de cultura Chinchorro.", "img": ""},
+    {"id": 4, "nombre": "Humedal del Río Lluta", "tipo":"Naturaleza", "lat": -18.4235, "lon": -70.3207,
+     "desc":"Santuario de aves cercano a la ciudad.", "img": ""},
+]
+ATRACTIVOS = pd.DataFrame(data_ejemplo)
+
+# -------------------------------------------------------------------------
+# VISTAS
+# -------------------------------------------------------------------------
+
+def vista_home():
+    today = datetime.now().strftime("%d %b %Y")
+
+    st.markdown(
+        f"""
+        <div class="hero">
+          <h2>🌍 {APP_TITLE}</h2>
+          <div class="chips">
+            <div class="chip"><b>📍 Ubicación</b><br><span class="small">{city}, {country}</span></div>
+            <div class="chip"><b>☀️ Clima</b><br><span class="small">{wx} {(str(temp)+'°C') if temp is not None else ''}</span></div>
+            <div class="chip"><b>📅 Hoy</b><br><span class="small">{today}</span></div>
+            <div class="chip"><b>🧭 Coords</b><br><span class="small">{round(lat,4)}, {round(lon,4)}</span></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-# ---------------- Panel de inicio ----------------
-if seccion == "📊 Panel de inicio":
-    st.header("Resumen")
-    c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Atractivos disponibles", len(ATRACTIVOS))
-    with c2: st.metric("Seleccionados", len(st.session_state.seleccion))
-    with c3: st.metric("Favoritos", len(st.session_state.favoritos))
-    st.divider()
-    st.subheader("Selección actual")
-    st.dataframe(ATRACTIVOS[ATRACTIVOS["id"].isin(st.session_state.seleccion)][
-        ["id", "nombre", "tipo", "dur_min", "horario"]
-    ], use_container_width=True)
+    st.markdown('<div class="grid">', unsafe_allow_html=True)
 
-# ---------------- Explora destinos ----------------
-if seccion == "🗺️ Explora destinos":
-    st.header("Explora destinos")
-    l, r = st.columns([1, 2])
-    with l:
-        tipos = ["Todos"] + sorted(ATRACTIVOS["tipo"].unique().tolist())
-        tsel = st.selectbox("Filtrar por tipo", tipos)
-        q = st.text_input("Buscar por nombre:", "")
-        candidatos = ATRACTIVOS.copy()
-        if tsel != "Todos":
-            candidatos = candidatos[candidatos["tipo"] == tsel]
-        if q.strip():
-            candidatos = candidatos[candidatos["nombre"].str.contains(q, case=False, regex=False)]
-
-        ids = candidatos["id"].tolist()
-        seleccion_local = st.multiselect(
-            "Selecciona para tu itinerario",
-            options=ids,
-            default=sorted(st.session_state.seleccion.intersection(ids)),
-            format_func=lambda i: candidatos.loc[candidatos["id"] == i, "nombre"].iloc[0]
-        )
-        if st.button("Guardar selección"):
-            st.session_state.seleccion = set(seleccion_local)
-            st.success("Selección actualizada.")
-        st.divider()
-        st.markdown("**Favoritos**")
-        for _, row in candidatos.iterrows():
-            label = ("⭐ " if row["id"] in st.session_state.favoritos else "☆ ") + row["nombre"]
-            if st.button(label, key=f"fav_{row['id']}"):
-                if row["id"] in st.session_state.favoritos:
-                    st.session_state.favoritos.remove(row["id"])
-                else:
-                    st.session_state.favoritos.add(row["id"])
-                st.rerun()
-    with r:
-        st.subheader("Vista")
-        st.dataframe(candidatos[["id", "nombre", "tipo", "dur_min", "horario", "desc"]], use_container_width=True, height=480)
-
-# ---------------- Detalles ----------------
-if seccion == "ℹ️ Detalles de la atracción":
-    st.header("Detalles de la atracción")
-    op = ATRACTIVOS.sort_values("nombre")
-    elegido = st.selectbox(
-        "Elige un atractivo",
-        options=op["id"].tolist(),
-        format_func=lambda i: op.loc[op["id"] == i, "nombre"].iloc[0]
-    )
-    data = ATRACTIVOS[ATRACTIVOS["id"] == elegido].iloc[0]
-    cA, cB = st.columns([2, 1])
-    with cA:
-        st.subheader(data["nombre"])
-        st.write(f"**Tipo:** {data['tipo']}  |  **Duración sugerida:** {data['dur_min']} min")
-        st.write(f"**Horario sugerido:** {data['horario']}")
-        st.write(data["desc"])
-        st.markdown(f"[Más información]({data['link']})")
-        if data["img"]:
-            st.image(data["img"], use_column_width=True)
-    with cB:
-        st.map(pd.DataFrame([{"lat": data["lat"], "lon": data["lon"]}]), zoom=11, use_container_width=True)
-        tog = st.toggle("Añadir/Quitar de selección", value=(elegido in st.session_state.seleccion))
-        if tog: st.session_state.seleccion.add(elegido)
-        else:   st.session_state.seleccion.discard(elegido)
-
-# ---------------- Planificador ----------------
-if seccion == "🗓️ Planificador de viajes":
-    st.header("Planificador de viajes (proximidad + tiempos y costos)")
-
-    sel_df = ATRACTIVOS[ATRACTIVOS["id"].isin(st.session_state.seleccion)].reset_index(drop=True)
-    if sel_df.empty:
-        st.warning("Primero elige atractivos en **Explora destinos**.")
-        st.stop()
-
-    c0, c1, c2, c3 = st.columns([1, 1, 1, 2])
-    with c0:
-        dias = st.number_input("Días", min_value=1, max_value=10, value=2, step=1)
+    # Tile 1: cercanos
+    c1, c2 = st.columns(2)
     with c1:
-        salida_hora = st.time_input("Hora de salida del día", value=datetime.strptime("09:00","%H:%M").time())
+        st.markdown('<div class="tile"><h4>📍 Lugares cerca de ti</h4>'
+                    '<p>Explora atracciones a menos de ~6 km.</p>', unsafe_allow_html=True)
+        if st.button("Ver cercanos", use_container_width=True):
+            st.session_state.page = "CERCANOS"; st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Tile 2: planificador
     with c2:
-        vel_kmh = st.number_input("Velocidad media (km/h)", min_value=10, max_value=120, value=40, step=5,
-                                  help="Usa 35–45 en ciudad, 60–80 en rutas.")
+        st.markdown('<div class="tile"><h4>🗺️ Planificar itinerario</h4>'
+                    '<p>Optimiza por cercanía, tiempos y gustos.</p>', unsafe_allow_html=True)
+        if st.button("Ir al planificador", use_container_width=True):
+            st.session_state.page = "PLAN"; st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    c3, c4 = st.columns(2)
     with c3:
-        costo_km = st.number_input("Costo aprox. por km (CLP)", min_value=0, max_value=5000, value=500, step=50,
-                                   help="Para taxi/traslado. Pon 0 si no te interesa el costo.")
+        st.markdown('<div class="tile"><h4>💱 Convertir moneda</h4>'
+                    '<p>CLP ⇄ USD/EUR/BOB/PEN con tasas reales.</p>', unsafe_allow_html=True)
+        if st.button("Abrir conversor", use_container_width=True):
+            st.session_state.page = "FX"; st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    coords = list(zip(sel_df["lat"].tolist(), sel_df["lon"].tolist()))
-    distM = distance_matrix(coords)
-    clusters = simple_kmeans_like(coords, k=int(dias), iters=6)
+    with c4:
+        st.markdown('<div class="tile"><h4>⭐ Buscar atracciones</h4>'
+                    '<p>Filtra por tipo, busca y agrega a tu plan.</p>', unsafe_allow_html=True)
+        if st.button("Ir a explorar", use_container_width=True):
+            st.session_state.page = "BUSCAR"; st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    plan_rows = []
-    advertencias = []
-    total_costo = 0
-    total_km = 0
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    for d, cl in enumerate(clusters, start=1):
-        if not cl:
-            plan_rows.append({"Día": d, "Hora": "—", "Atractivo": "(sin asignar)",
-                              "Estancia_min": 0, "Traslado_km": 0.0, "Traslado_min": 0, "Costo_traslado": 0})
-            continue
+def vista_cercanos():
+    st.subheader("📍 Lugares cerca de ti")
+    cercanos = nearby_places(ATRACTIVOS, lat, lon, max_km=6.0, limit=10)
+    if not cercanos:
+        st.info("No se encontraron lugares a ~6 km.")
+        return
+    for d, nombre, r in cercanos:
+        with st.container(border=True):
+            st.markdown(f"**{nombre}** · {d:.1f} km — {r['tipo']}")
+            st.caption(r["desc"])
+            if st.button(f"Añadir al itinerario (+)", key=f"add_{r['id']}"):
+                st.session_state.seleccion.add(int(r["id"]))
+                st.success("Añadido ✅")
 
-        orden = nearest_neighbor_route(cl, distM)
-        hora_actual = datetime.combine(datetime.today(), salida_hora)
-
-        for i, idx in enumerate(orden):
-            lugar = sel_df.iloc[idx]
-            # traslado desde el anterior
-            if i == 0:
-                km = 0.0
-                t_traslado = timedelta(minutes=0)
-            else:
-                prev_idx = orden[i-1]
-                km = float(distM[prev_idx, idx])
-                t_traslado = estimar_tiempo_traslado(km, vel_kmh)
-                hora_actual += t_traslado
-            # control de horario
-            hhmm = hora_actual.time()
-            if not dentro_horario(hhmm, lugar["horario"]):
-                advertencias.append(f"⚠️ {lugar['nombre']} cae fuera de horario (llegada aprox {hhmm.strftime('%H:%M')}, rango {lugar['horario']}).")
-
-            # estancia
-            est_min = int(lugar["dur_min"])
-            fin_visita = hora_actual + timedelta(minutes=est_min)
-
-            # costos
-            costo = int(round(km * costo_km))
-            total_costo += costo
-            total_km += km
-
-            plan_rows.append({
-                "Día": d,
-                "Hora": hora_actual.strftime("%H:%M"),
-                "Atractivo": lugar["nombre"],
-                "Estancia_min": est_min,
-                "Traslado_km": round(km, 1),
-                "Traslado_min": int(t_traslado.total_seconds() // 60),
-                "Costo_traslado": costo
-            })
-
-            # mover reloj al fin de visita
-            hora_actual = fin_visita
-
-    st.subheader("Itinerario sugerido")
-    df_plan = pd.DataFrame(plan_rows)
-    st.dataframe(df_plan, use_container_width=True)
-
-    st.caption("Puedes descargar y editar el itinerario en tu computador.")
-    st.download_button("⬇️ Descargar CSV", df_plan.to_csv(index=False).encode("utf-8"),
-                       "itinerario_arica.csv", "text/csv")
-
-    # Resumen por día
-    st.divider()
-    st.subheader("Resumen y avisos")
-    colA, colB = st.columns([1,1])
-    with colA:
-        resumen = df_plan.groupby("Día").agg(
-            Paradas=("Atractivo", "count"),
-            Km_traslado=("Traslado_km", "sum"),
-            Min_traslado=("Traslado_min", "sum"),
-            Estancia_total_min=("Estancia_min", "sum"),
-            Costo_CLP=("Costo_traslado", "sum")
-        ).reset_index()
-        st.dataframe(resumen, use_container_width=True)
-    with colB:
-        st.metric("KM totales aprox", f"{total_km:.1f}")
-        st.metric("Costo total aprox (CLP)", f"{int(total_costo):,}".replace(",", "."))
-
-    if advertencias:
-        st.warning(" • ".join(advertencias))
-
-# ---------------- Mapa interactivo ----------------
-if seccion == "🧭 Mapa interactivo":
-    st.header("Mapa interactivo")
-    sel_df = ATRACTIVOS[ATRACTIVOS["id"].isin(st.session_state.seleccion)].reset_index(drop=True)
-    if sel_df.empty:
-        st.warning("No hay selección. Ve a **Explora destinos**.")
-        st.stop()
-    dias_color = st.number_input("Días (para colorear clusters)", 1, 10, 2)
-    coords = list(zip(sel_df["lat"].tolist(), sel_df["lon"].tolist()))
-    clusters = simple_kmeans_like(coords, k=int(dias_color), iters=6)
-
-    registros = []
-    palette = [
-        [31, 119, 180],[255, 127, 14],[44, 160, 44],
-        [214, 39, 40],[148, 103, 189],[140, 86, 75],
-        [227, 119, 194],[127, 127, 127],[188, 189, 34],[23, 190, 207],
-    ]
-    for d, cl in enumerate(clusters, start=1):
-        for idx in cl:
-            r = sel_df.iloc[idx]
-            registros.append({
-                "nombre": r["nombre"], "tipo": r["tipo"], "lat": r["lat"], "lon": r["lon"],
-                "dia": d, "color": palette[(d-1) % len(palette)]
-            })
-    mdf = pd.DataFrame(registros)
-    view_state = pdk.ViewState(latitude=-18.48, longitude=-70.32, zoom=9)
-    layer = pdk.Layer("ScatterplotLayer", data=mdf, get_position='[lon, lat]',
-                      get_radius=2200, get_fill_color="color", pickable=True)
-    tooltip = {"text": "{nombre}\nTipo: {tipo}\nDía: {dia}"}
-    st.pydeck_chart(pdk.Deck(map_style=None, initial_view_state=view_state, layers=[layer], tooltip=tooltip))
-
-# ---------------- QR de la app ----------------
-if seccion == "🔗 QR de la app":
-    st.header("Código QR del enlace de la aplicación")
-    if APP_URL:
-        st.info(f"Enlace actual configurado: {APP_URL}")
-        st.markdown("**Genera el QR con una herramienta externa o con un script local (ver pasos más abajo).**")
+def vista_plan():
+    st.subheader("🗺️ Planificador (borrador)")
+    st.write("Elementos seleccionados:")
+    if st.session_state.seleccion:
+        df_sel = ATRACTIVOS[ATRACTIVOS["id"].isin(st.session_state.seleccion)]
+        st.dataframe(df_sel[["nombre","tipo","lat","lon"]], use_container_width=True)
     else:
-        st.warning("Aún no has configurado APP_URL en el código. Cuando publiques la app, pega aquí tu URL pública.")
-    st.markdown("""
-    **Cómo generar el QR**  
-    1) Con una web: prueba `qr-code-generator.com` o `goqr.me`, pega tu URL pública y descarga el PNG.  
-    2) Con Python (script local) usando `qrcode` + `Pillow`. Consulta las instrucciones en el README o en esta misma app (más abajo).
-    """)
-  # ==================================================
-# === Pantalla de inicio (UI principal estilo móvil) ===
-# ==================================================
+        st.info("Aún no agregas lugares. Ve a 'Lugares cerca de ti' o 'Buscar atracciones' y añade algunos.")
 
-# 1️⃣ Obtener ubicación y clima
-lat, lon, city, country = ip_geolocate()
-temp, weather = current_weather(lat, lon)
-today = datetime.now().strftime("%d de %B de %Y")
+def vista_fx():
+    st.subheader("💱 Conversor de moneda")
+    cols = ["CLP","USD","EUR","BOB","PEN"]
+    m_from = st.selectbox("Desde", cols, index=0)
+    m_to   = st.selectbox("Hacia", cols, index=1)
+    monto  = st.number_input("Monto", min_value=0.0, value=10000.0, step=100.0, format="%.2f")
 
-# 2️⃣ Encabezado principal (hero azul)
-st.markdown(f"""
-<div class="hero">
-  <h3>🌍 Asistente Turístico Arica & Parinacota</h3>
-  <div class="chips">
-    <div class="chip">📍 {city}, {country}</div>
-    <div class="chip">☀️ {weather} — {temp if temp else '?'}°C</div>
-    <div class="chip">📅 {today}</div>
-    <div class="chip">🧭 Lat: {round(lat,2)} / Lon: {round(lon,2)}</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    if st.button("Convertir", type="primary"):
+        try:
+            url = f"https://api.exchangerate.host/convert?from={m_from}&to={m_to}&amount={monto}"
+            j = requests.get(url, timeout=8).json()
+            st.success(f"≈ {j['result']:,.2f} {m_to}")
+        except Exception:
+            st.error("No fue posible consultar las tasas en este momento.")
 
-# 3️⃣ Recuadros inferiores (acciones rápidas)
-st.markdown("""
-<div class="grid">
-  <div class="tile">
-    <h4>📍 Lugares cerca de ti</h4>
-    <p>Descubre los atractivos turísticos más próximos a tu ubicación.</p>
-    <a href="#" class="btn">Explorar</a>
-  </div>
-
-  <div class="tile">
-    <h4>🗺️ Planificar itinerario</h4>
-    <p>Organiza tus visitas según distancia y tiempo disponible.</p>
-    <a href="#" class="btn">Comenzar</a>
-  </div>
-
-  <div class="tile">
-    <h4>💱 Convertir moneda</h4>
-    <p>Consulta tasas de cambio y convierte valores al instante.</p>
-    <a href="#" class="btn">Abrir</a>
-  </div>
-
-  <div class="tile">
-    <h4>⭐ Encontrar atracciones</h4>
-    <p>Busca sitios emblemáticos, playas, museos y rutas locales.</p>
-    <a href="#" class="btn">Buscar</a>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ==================================================
-# === Navegación entre secciones (modo App) ===
-# ==================================================
-
-# Barra lateral (menú de navegación)
-st.sidebar.title("📍 Navegación")
-page = st.sidebar.radio("Ir a:", [
-    "🏠 Inicio",
-    "📍 Lugares cerca de ti",
-    "🗺️ Planificar itinerario",
-    "💱 Convertir moneda",
-    "⭐ Buscar atracciones"
-])
-
-# -------------------------------
-# 🏠 Sección: INICIO
-# -------------------------------
-if page == "🏠 Inicio":
-    st.markdown("### 🌍 Bienvenido a AricaGO — Tu Asistente Turístico Inteligente")
-    st.write("Explora lugares destacados, planifica tus días y consulta el clima en tiempo real.")
-    st.write("Selecciona una opción en la barra lateral para comenzar.")
-
-# -------------------------------
-# 📍 Sección: LUGARES CERCA
-# -------------------------------
-elif page == "📍 Lugares cerca de ti":
-    st.subheader("📍 Lugares cercanos")
-    st.write("Mostrando atractivos dentro de un radio de 5 km desde tu ubicación actual.")
-    try:
-        df = pd.read_csv("atractivos.csv")  # si tienes dataset local
-        lugares = nearby_places(df, lat, lon)
-        if lugares:
-            for d, name, r in lugares:
-                st.markdown(f"**{name}** — {d:.2f} km")
-        else:
-            st.info("No se encontraron lugares cercanos en el radio de 5 km.")
-    except Exception:
-        st.warning("No se pudo cargar la base de datos de atractivos.")
-
-# -------------------------------
-# 🗺️ Sección: PLANIFICAR ITINERARIO
-# -------------------------------
-elif page == "🗺️ Planificar itinerario":
-    st.subheader("🗺️ Planificar itinerario")
-    st.write("Selecciona los atractivos turísticos que te interesen y genera tu ruta óptima.")
-    dias = st.number_input("¿Cuántos días durará tu viaje?", min_value=1, max_value=10, value=3)
-    st.write(f"Tu itinerario cubrirá {dias} día(s). (Función en desarrollo)")
-
-# -------------------------------
-# 💱 Sección: CONVERTIR MONEDA
-# -------------------------------
-elif page == "💱 Convertir moneda":
-    st.subheader("💱 Conversor de Moneda")
-    st.write("Convierte entre CLP (peso chileno) y otras monedas.")
-    monto = st.number_input("Monto en pesos chilenos (CLP):", min_value=0.0, value=10000.0)
-    tasa_usd = 0.0011  # ejemplo estático, 1 CLP = 0.0011 USD
-    st.write(f"💵 Equivalente en USD: **{monto * tasa_usd:.2f}**")
-
-# -------------------------------
-# ⭐ Sección: BUSCAR ATRACCIONES
-# -------------------------------
-elif page == "⭐ Buscar atracciones":
+def vista_buscar():
     st.subheader("⭐ Buscar atracciones")
-    st.text_input("🔍 Escribe el nombre de una atracción o tipo de lugar:")
-    st.info("Ejemplo: 'playa', 'museo', 'mirador'. (Próximamente con búsqueda inteligente)")
+    q = st.text_input("🔎 Busca por nombre o filtra por tipo (ej: playa, museo, mirador)")
+    tipo = st.multiselect("Filtrar por tipo", sorted(ATRACTIVOS["tipo"].unique().tolist()))
+    df = ATRACTIVOS.copy()
+    if q:
+        df = df[df["nombre"].str.contains(q, case=False, na=False)]
+    if tipo:
+        df = df[df["tipo"].isin(tipo)]
+    if df.empty:
+        st.info("Sin resultados.")
+        return
+    for _, r in df.iterrows():
+        with st.container(border=True):
+            st.markdown(f"**{r['nombre']}** — {r['tipo']}")
+            st.caption(r["desc"])
+            if st.button("Añadir al itinerario (+)", key=f"b_{r['id']}"):
+                st.session_state.seleccion.add(int(r["id"]))
+                st.success("Añadido ✅")
+
+# -------------------------------------------------------------------------
+# ROUTER
+# -------------------------------------------------------------------------
+if st.session_state.page == "HOME":
+    vista_home()
+elif st.session_state.page == "CERCANOS":
+    vista_cercanos()
+elif st.session_state.page == "PLAN":
+    vista_plan()
+elif st.session_state.page == "FX":
+    vista_fx()
+elif st.session_state.page == "BUSCAR":
+    vista_buscar()
